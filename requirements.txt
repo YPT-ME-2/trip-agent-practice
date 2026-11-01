@@ -1,0 +1,8 @@
+fastapi==0.144.0
+uvicorn==0.39.0
+pydantic==2.13.5
+aiohttp==3.13.5
+langgraph==1.2.15
+langchain-community==0.4.2
+langchain-ollama==1.1.0
+faiss-cpu==1.15.1
