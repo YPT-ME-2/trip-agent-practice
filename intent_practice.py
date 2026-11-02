@@ -1,6 +1,5 @@
 import asyncio
 import json
-
 # import aiohttp
 from llm_service import call_model
 from pathlib import Path
@@ -13,6 +12,8 @@ from langgraph.graph import StateGraph, START, END
 
 from policy_service import PolicyService
 from compliance_service import check_hotel_cost
+from memory_service import load_trip_history, save_trip_history
+
 policy_service = PolicyService()
 
 async def recognize_intent(question:str)->dict:
@@ -25,8 +26,9 @@ async def recognize_intent(question:str)->dict:
 
 请返回 JSON，包含以下字段：
 - intent：行程规划用 itinerary_planning，其他需求用 other
-仅询问差旅报销标准、交通标准或审批规定用 policy_query;
-仅要求记住或更新酒店品牌偏好，使用 preference_save。
+询问差旅报销标准、交通标准或审批规定用 policy_query;
+要求记住或更新酒店品牌偏好，使用 preference_save。
+询问之前保存的酒店偏好或历史行程草案，使用 memory_query。
 其他需求用 other。
 - origin：出发地
 - destination：目的地
@@ -352,11 +354,42 @@ async def plan_trip(
         "policy_results": [],
         "plan": "",
     })
+
+    save_trip_history(requirements, result["plan"])
     return {
         "status": "completed",
         "answer": result["plan"],
         "hotel_cost_check": hotel_cost_check,
     }
+
+async def answer_memory(question:str)->str:
+    """回答用户关于之前保存的酒店偏好的问题。"""
+    preferences=load_preference()
+    trip_history = load_trip_history()
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "你是个人记忆助手，根据已保存的偏好和历史行程草案回答问题。"
+                "行程草案只代表曾经规划，不代表用户实际出行。"
+                "没有记录的信息请说明没有记录。回答简短。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "用户问题": question,
+                    "已保存偏好": preferences,
+                    "历史行程草案": trip_history[-10:],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+
+    return await call_model(messages)
+
 
 async def agent_chat_service(
         question:str,
@@ -364,6 +397,13 @@ async def agent_chat_service(
         )->dict:
     requirements = await recognize_intent(question)
     intent = requirements.get("intent")
+
+    if intent == "memory_query":
+        answer = await answer_memory(question)
+        return {
+            "status": "completed",
+            "answer": answer,
+        }
 
     if intent == "itinerary_planning":
         return await plan_trip(question, requirements, nightly_price=nightly_price)
@@ -391,7 +431,7 @@ async def agent_chat_service(
         }
     return {
         "status": "unsupported",
-        "answer": "目前支持行程规划、政策查询和酒店偏好保存。",
+        "answer": "目前支持行程规划、政策查询、酒店偏好保存和查询。",
     }
 
 
