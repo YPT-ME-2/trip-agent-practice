@@ -14,7 +14,10 @@ async def call_model(
     if json_output:
         payload["format"] = "json"
 
-    async with aiohttp.ClientSession(trust_env=False) as session:
+    async with aiohttp.ClientSession(
+        trust_env=False,
+        timeout=aiohttp.ClientTimeout(total=120),
+        ) as session:
         async with session.post(
             "http://127.0.0.1:11434/api/chat",
             json=payload
