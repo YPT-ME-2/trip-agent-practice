@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-
+import json
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaEmbeddings
 
@@ -14,7 +14,8 @@ class PolicyService:
         self.vector_store: FAISS | None = None
 
     async def load(self):
-        path=Path(__file__).parent / "差旅政策.txt"
+        folder = Path(__file__).parent
+        path=folder /"差旅政策.txt"
         text = path.read_text(encoding="utf-8-sig")
 
         # 演示文件按空行分段，每段是一条政策
@@ -24,10 +25,30 @@ class PolicyService:
             if paragraph.strip()
         ]
 
+        metadatas=[{"source": path.name} for _ in chunks]
+
+        rules_path=folder /"policy_rules.json"
+        rules_text=rules_path.read_text(encoding="utf-8-sig")
+        rules=json.loads(rules_text)
+
+        for city, limit in rules["hotel_limits"].items():
+            content = (
+                f"【住宿标准】{city}的住宿报销上限"
+                f"为每人每晚{limit}元。"
+            )
+            chunks.append(content)
+            metadatas.append({"source": rules_path.name})
+
+        self.vector_store = await FAISS.afrom_texts(
+            chunks,
+            self.embedding,
+            metadatas=metadatas,
+        )
+
         self.vector_store=await FAISS.afrom_texts(
             chunks,
             self.embedding,
-            metadatas=[{"source": path.name} for _ in chunks],
+            metadatas=metadatas,
         )
 
     async def search(self,query:str) -> list[dict]:

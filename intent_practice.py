@@ -12,7 +12,7 @@ from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 
 from policy_service import PolicyService
-
+from compliance_service import check_hotel_cost
 policy_service = PolicyService()
 
 async def recognize_intent(question:str)->dict:
@@ -291,6 +291,7 @@ async def answer_policy(question: str) -> str:
 async def plan_trip(
         question:str,
         requirements: dict | None = None,
+        nightly_price: float | None = None,
         )-> dict:
     if requirements is None:
         requirements = await recognize_intent(question)
@@ -328,6 +329,15 @@ async def plan_trip(
         # 本次没说，就使用之前保存的偏好
         requirements["hotel_preference"] = preferences.get("hotel_preference")
 
+    hotel_cost_check = check_hotel_cost(
+        city=requirements["destination"],
+        nightly_price=nightly_price,
+    )
+
+    # 让规划模型也能看到报价和规则判断结果
+    requirements["nightly_price"] = nightly_price
+    requirements["hotel_cost_check"] = hotel_cost_check
+
     await policy_service.load()
     result = await graph.ainvoke({
         "requirements": requirements,
@@ -338,14 +348,18 @@ async def plan_trip(
     return {
         "status": "completed",
         "answer": result["plan"],
+        "hotel_cost_check": hotel_cost_check,
     }
 
-async def agent_chat_service(question:str)->dict:
+async def agent_chat_service(
+        question:str,
+        nightly_price: float | None = None,
+        )->dict:
     requirements = await recognize_intent(question)
     intent = requirements.get("intent")
 
     if intent == "itinerary_planning":
-        return await plan_trip(question, requirements)
+        return await plan_trip(question, requirements, nightly_price=nightly_price)
     if intent == "policy_query":
         answer = await answer_policy(question)
         return {
