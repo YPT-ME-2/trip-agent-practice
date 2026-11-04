@@ -13,87 +13,168 @@ from langgraph.graph import StateGraph, START, END
 from policy_service import PolicyService
 from compliance_service import check_hotel_cost
 from memory_service import load_trip_history, save_trip_history
-from skill_loader import load_skill, load_skill_metadata
+from skill_loader import load_skill, load_skill_metadata, load_agent
 
 policy_service = PolicyService()
 
-async def recognize_intent(question:str)->dict:
-    """把用户的话整理成出行需求。"""
+# async def recognize_intent(question:str)->dict:
+#     """把用户的话整理成出行需求。"""
+#     messages = [
+#         {
+#             "role": "system",
+#             "content": """
+# 你是差旅助手，负责提取用户需求。
+
+# 请返回 JSON，包含以下字段：
+# - intent：行程规划用 itinerary_planning，其他需求用 other
+# 询问差旅报销标准、交通标准或审批规定用 policy_query;
+# 要求记住或更新酒店品牌偏好，使用 preference_save。
+# 询问之前保存的酒店偏好或历史行程草案，使用 memory_query。
+# 其他需求用 other。
+# - origin：出发地
+# - destination：目的地
+# - date：出发日期
+# - duration：出行时长
+# - hotel_preference：酒店偏好
+# - tasks：任务列表，每个任务包含 name 和 priority。
+#   行程规划默认返回：
+#   [
+#     {"name": "search", "priority": 1},
+#     {"name": "policy", "priority": 1},
+#     {"name": "plan", "priority": 2}
+#   ]
+#   如果用户明确要求不联网，返回：
+#   [
+#     {"name": "policy", "priority": 1},
+#     {"name": "plan", "priority": 2}
+#   ]
+#   非行程规划需求返回 []。
+#   priority 数字越小越先执行，同一 priority 的任务并行执行。
+
+# 用户没提供的信息填 null，不要猜测。
+# 只提取信息，不生成行程。
+# 用户没提供的信息填 null，不要猜测。
+# 日期保留用户原始表达，例如“11月5日”，未提供年份时不要补充年份。
+# 只提取信息，不生成行程。
+# """,
+#         },
+#         {
+#             "role": "user",
+#             "content": question,
+#         },
+#     ]
+
+#     # async with aiohttp.ClientSession() as session:
+#     #     async with session.post(
+#     #         "http://127.0.0.1:11434/api/chat",
+#     #         json={
+#     #             "model": "qwen3.5:9b",
+#     #             "messages": messages,
+#     #             "stream": False,
+#     #             "think": False,
+#     #             "format": "json",
+#     #         },
+#     #     ) as response:
+#     #         # response.raise_for_status()
+#     #         # data = await response.json()
+#     #         if response.status == 401:
+#     #             raise RuntimeError("搜索认证失败，请检查 SERPAPI_KEY 是否为有效的 SerpAPI 密钥")
+
+#     #         if response.status >= 400:
+#     #             raise RuntimeError(f"搜索请求失败，HTTP 状态码：{response.status}")
+
+#     #         data = await response.json()
+
+#     # return json.loads(data["message"]["content"])
+
+#     text = await call_model(messages, json_output=True)
+
+#     # messages[0]["content"] += (
+#     #     "\n\n可用技能简介：\n"
+#     #     + json.dumps(load_skill_metadata(), ensure_ascii=False)
+#     # )
+#     # return json.loads(text)
+
+#     messages[0]["content"] += (
+#         "\n\n可用技能简介：\n"
+#         + json.dumps(load_skill_metadata(), ensure_ascii=False)
+#     )
+
+#     text = await call_model(messages, json_output=True)
+#     return json.loads(text)
+
+
+async def recognize_intent(question: str) -> dict:
+    # [-1:] 取得最近一条记录，仍然是列表
+    recent_trips = load_trip_history()[-1:]
+
     messages = [
         {
             "role": "system",
             "content": """
-你是差旅助手，负责提取用户需求。
+你是差旅助手，负责理解用户需求、结合历史改写问题并安排任务。
 
 请返回 JSON，包含以下字段：
-- intent：行程规划用 itinerary_planning，其他需求用 other
-询问差旅报销标准、交通标准或审批规定用 policy_query;
-要求记住或更新酒店品牌偏好，使用 preference_save。
-询问之前保存的酒店偏好或历史行程草案，使用 memory_query。
-其他需求用 other。
-- origin：出发地
-- destination：目的地
-- date：出发日期
-- duration：出行时长
-- hotel_preference：酒店偏好
-- tasks：任务列表，每个任务包含 name 和 priority。
-  行程规划默认返回：
-  [
-    {"name": "search", "priority": 1},
-    {"name": "policy", "priority": 1},
-    {"name": "plan", "priority": 2}
-  ]
-  如果用户明确要求不联网，返回：
-  [
-    {"name": "policy", "priority": 1},
-    {"name": "plan", "priority": 2}
-  ]
-  非行程规划需求返回 []。
-  priority 数字越小越先执行，同一 priority 的任务并行执行。
 
-用户没提供的信息填 null，不要猜测。
-只提取信息，不生成行程。
-用户没提供的信息填 null，不要猜测。
-日期保留用户原始表达，例如“11月5日”，未提供年份时不要补充年份。
-只提取信息，不生成行程。
+- rewritten_query：补全上下文后的完整问题。
+- intent：
+  安排行程使用 itinerary_planning。
+  查询差旅政策使用 policy_query。
+  保存或更新酒店偏好使用 preference_save。
+  查询已保存偏好或历史行程使用 memory_query。
+  其他需求使用 other。
+- origin：出发地。
+- destination：目的地。
+- date：出发日期。
+- duration：出行时长。
+- hotel_preference：酒店偏好。
+- tasks：任务列表，每项包含 name 和 priority。
+
+上下文使用方式：
+用户说“上次”“照旧”“其他不变”等，表示引用最近的行程草案。
+结合该记录补全省略的信息，本次明确修改的内容优先。
+用户提出独立的新需求时，按新需求提取，不自动套用上次行程。
+没有依据的信息填 null。
+日期保留原始表达，不自行补充年份。
+根据改写后的需求填写 origin、destination、date、duration 等字段。
+
+任务安排：
+行程规划默认返回：
+[
+  {"name": "search", "priority": 1},
+  {"name": "policy", "priority": 1},
+  {"name": "plan", "priority": 2}
+]
+
+明确要求不联网时返回：
+[
+  {"name": "policy", "priority": 1},
+  {"name": "plan", "priority": 2}
+]
+
+非行程规划需求返回 []。
+只输出 JSON，不生成行程草案。
 """,
         },
         {
             "role": "user",
-            "content": question,
+            "content": json.dumps(
+                {
+                    "本次需求": question,
+                    "最近的行程草案": recent_trips,
+                    "可用技能简介": load_skill_metadata(),
+                },
+                ensure_ascii=False,
+            ),
         },
     ]
 
-    # async with aiohttp.ClientSession() as session:
-    #     async with session.post(
-    #         "http://127.0.0.1:11434/api/chat",
-    #         json={
-    #             "model": "qwen3.5:9b",
-    #             "messages": messages,
-    #             "stream": False,
-    #             "think": False,
-    #             "format": "json",
-    #         },
-    #     ) as response:
-    #         # response.raise_for_status()
-    #         # data = await response.json()
-    #         if response.status == 401:
-    #             raise RuntimeError("搜索认证失败，请检查 SERPAPI_KEY 是否为有效的 SerpAPI 密钥")
-
-    #         if response.status >= 400:
-    #             raise RuntimeError(f"搜索请求失败，HTTP 状态码：{response.status}")
-
-    #         data = await response.json()
-
-    # return json.loads(data["message"]["content"])
-
     text = await call_model(messages, json_output=True)
+    result = json.loads(text)
 
-    messages[0]["content"] += (
-        "\n\n可用技能简介：\n"
-        + json.dumps(load_skill_metadata(), ensure_ascii=False)
-    )
-    return json.loads(text)
+    print("改写后的需求：", result["rewritten_query"])
+
+    return result
 
 async def generate_plan(
         requirements: dict,
@@ -101,41 +182,43 @@ async def generate_plan(
         policy_results: list[dict],
         ) -> str:
     """根据结构化需求生成行程草案。"""
-    messages = [
-        {
-            "role": "system",
-            "content": load_skill("plan-trip"),
-        },
-        {
-            "role": "user",
-            # "content": json.dumps(requirements, ensure_ascii=False),
-            "content": json.dumps(
-                {
-                    "出行需求": requirements,
-                    "搜索资料": search_results,
-                    "差旅政策": policy_results,
-                },
-                ensure_ascii=False,
-            ),
-        },
-    ]
+    agent=load_agent("plan-trip", "ItineraryPlanningAgent")
+    return await agent.reply(requirements, search_results, policy_results)
+    # messages = [
+    #     {
+    #         "role": "system",
+    #         "content": load_skill("plan-trip"),
+    #     },
+    #     {
+    #         "role": "user",
+    #         # "content": json.dumps(requirements, ensure_ascii=False),
+    #         "content": json.dumps(
+    #             {
+    #                 "出行需求": requirements,
+    #                 "搜索资料": search_results,
+    #                 "差旅政策": policy_results,
+    #             },
+    #             ensure_ascii=False,
+    #         ),
+    #     },
+    # ]
 
-    # async with aiohttp.ClientSession() as session:
-    #     async with session.post(
-    #         "http://127.0.0.1:11434/api/chat",
-    #         json={
-    #             "model": "qwen3.5:9b",
-    #             "messages": messages,
-    #             "stream": False,
-    #             "think": False,
-    #         },
-    #     ) as response:
-    #         response.raise_for_status()
-    #         data = await response.json()
+    # # async with aiohttp.ClientSession() as session:
+    # #     async with session.post(
+    # #         "http://127.0.0.1:11434/api/chat",
+    # #         json={
+    # #             "model": "qwen3.5:9b",
+    # #             "messages": messages,
+    # #             "stream": False,
+    # #             "think": False,
+    # #         },
+    # #     ) as response:
+    # #         response.raise_for_status()
+    # #         data = await response.json()
 
-    # return data["message"]["content"]
-    text = await call_model(messages,json_output=False)
-    return text
+    # # return data["message"]["content"]
+    # text = await call_model(messages,json_output=False)
+    # return text
 
 # 偏好文件和当前 Python 文件放在同一个目录
 PREFERENCE_FILE = Path(__file__).parent / "preferences.json"
