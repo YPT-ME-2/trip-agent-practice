@@ -13,6 +13,7 @@ from langgraph.graph import StateGraph, START, END
 from policy_service import PolicyService
 from compliance_service import check_hotel_cost
 from memory_service import load_trip_history, save_trip_history
+from skill_loader import load_skill, load_skill_metadata
 
 policy_service = PolicyService()
 
@@ -35,10 +36,20 @@ async def recognize_intent(question:str)->dict:
 - date：出发日期
 - duration：出行时长
 - hotel_preference：酒店偏好
-- tasks：任务列表，按以下规则返回：
-  行程规划默认返回 ["search", "policy"]。
-  如果用户明确要求不联网，返回 ["policy"]。
+- tasks：任务列表，每个任务包含 name 和 priority。
+  行程规划默认返回：
+  [
+    {"name": "search", "priority": 1},
+    {"name": "policy", "priority": 1},
+    {"name": "plan", "priority": 2}
+  ]
+  如果用户明确要求不联网，返回：
+  [
+    {"name": "policy", "priority": 1},
+    {"name": "plan", "priority": 2}
+  ]
   非行程规划需求返回 []。
+  priority 数字越小越先执行，同一 priority 的任务并行执行。
 
 用户没提供的信息填 null，不要猜测。
 只提取信息，不生成行程。
@@ -77,6 +88,11 @@ async def recognize_intent(question:str)->dict:
     # return json.loads(data["message"]["content"])
 
     text = await call_model(messages, json_output=True)
+
+    messages[0]["content"] += (
+        "\n\n可用技能简介：\n"
+        + json.dumps(load_skill_metadata(), ensure_ascii=False)
+    )
     return json.loads(text)
 
 async def generate_plan(
@@ -88,30 +104,7 @@ async def generate_plan(
     messages = [
         {
             "role": "system",
-            "content": """
-你是差旅行程规划助手，请根据用户需求生成简洁的行程草案。
-
-要求：
-1. 按天安排交通、住宿和出差活动。
-2. 尊重用户的酒店偏好。
-3. 未提供的会议地点和时间，标注“待确认”，不要自行编造。
-4. 参考提供的搜索资料安排交通，资料没有说明的信息标注“待确认”。
-5. 网页摘要不代表实时票务和房态，不要编造具体班次、价格或余房。
-6. 引用来源时遵守以下规则：
-   - 网页链接只能原样使用“搜索资料”中实际提供的 url，不得自行拼接或编造。
-   - 本地政策只能引用“差旅政策”中提供的 source 文件名，例如：
-     （来源：policy_rules.json）
-     （来源：差旅政策.txt）
-   - 本地文件不是网页，不得为其添加 https:// 等网址前缀。
-   - “搜索资料”为空时，不输出网页来源链接。
-
-7. 只输出行程草案。
-日期没有年份时，不要推断星期几。
-根据提供的差旅政策安排方案，并注明政策来源。
-个人酒店偏好不能覆盖企业规定。
-没有实际酒店报价时，不能宣称酒店符合住宿报销上限。
-未检索到的政策事项，不要自行编造。
-""",
+            "content": load_skill("plan-trip"),
         },
         {
             "role": "user",
@@ -205,26 +198,26 @@ async def execute_tasks_node(state: TravelState):
     handlers = {
         "search": search_node,
         "policy": policy_node,
+        "plan": plan_node,
     }
-    tasks = state["requirements"].get("tasks", ["search", "policy"])
+    tasks = state["requirements"]["tasks"]
 
-    if "policy" not in tasks:
-        tasks = tasks+["policy"]
-    jobs=[]
+    priorities=sorted({task["priority"] for task in tasks})
+    current_state = dict(state)
+    updates = {}
 
-    for name in tasks:
-        if name not in handlers:
-            raise ValueError(f"不支持的任务：{name}")
+    for priority in priorities:
+        print(f"执行优先级 {priority} 的任务")
+        jobs = []
+        for task in tasks:
+            if task["priority"] == priority:
+                function = handlers[task["name"]]
+                jobs.append(function(current_state))
+        outputs = await asyncio.gather(*jobs)
 
-        function = handlers[name]
-        jobs.append(function(state))
-
-    outputs = await asyncio.gather(*jobs)
-
-    updates={}
-
-    for output in outputs:
-        updates.update(output)
+        for output in outputs:
+            current_state.update(output)
+            updates.update(output)
 
     return updates
 
@@ -241,16 +234,24 @@ async def execute_tasks_node(state: TravelState):
 # builder.add_edge(["search","policy"], "plan")
 # builder.add_edge("plan", END)
 
+# builder = StateGraph(TravelState)
+
+# builder.add_node("execute_tasks", execute_tasks_node)
+# builder.add_node("plan", plan_node)
+
+# builder.add_edge(START, "execute_tasks")
+# builder.add_edge("execute_tasks", "plan")
+# builder.add_edge("plan", END)
+
 builder = StateGraph(TravelState)
 
 builder.add_node("execute_tasks", execute_tasks_node)
-builder.add_node("plan", plan_node)
 
 builder.add_edge(START, "execute_tasks")
-builder.add_edge("execute_tasks", "plan")
-builder.add_edge("plan", END)
+builder.add_edge("execute_tasks", END)
 
 graph = builder.compile()
+
 
 async def answer_policy(question: str) -> str:
     print("正在检索差旅政策……")
@@ -369,11 +370,7 @@ async def answer_memory(question:str)->str:
     messages=[
         {
             "role": "system",
-            "content": (
-                "你是个人记忆助手，根据已保存的偏好和历史行程草案回答问题。"
-                "行程草案只代表曾经规划，不代表用户实际出行。"
-                "没有记录的信息请说明没有记录。回答简短。"
-            ),
+            "content": load_skill("memory-query"),
         },
         {
             "role": "user",
