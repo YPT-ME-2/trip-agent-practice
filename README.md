@@ -5,7 +5,8 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 
 ## 已实现
 
-- 模型识别行程规划、政策查询、偏好保存和记忆查询四类意图。
+- 模型识别行程规划、政策查询、偏好保存、记忆查询和公开信息查询五类意图。
+- 支持独立查询目的地、景点和交通等公开信息，复用搜索服务，无需填写完整行程字段。
 - 检查行程必要信息，终端支持追问缺失字段。
 - 酒店偏好保存到本地 JSON 文件。
 - FAISS 检索演示差旅政策。
@@ -35,6 +36,7 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 - skills/plan-trip/SKILL.md：行程规划指令。
 - skills/plan-trip/script/agent.py：规划 Agent，接收需求与检索资料，调用模型生成草案。
 - skills/memory-query/SKILL.md：偏好与历史行程查询指令。
+- skills/information-query/SKILL.md：独立公开信息查询指令。
 - tool_practice.py：独立的 Ollama 工具调用闭环练习，尚未接入业务接口。
 - 差旅政策.txt：虚构的演示政策，不代表真实企业制度。
 
@@ -112,6 +114,12 @@ POST /api/trip/plan 也支持同样的请求字段。nightly_price 表示每人�
 向 POST /api/agent/chat 提交 {"question": "我之前说喜欢住什么酒店？"} 可查询已保存的酒店偏好；提交 {"question": "我之前规划过哪些目的地？"} 可查询已保存的历史行程草案。
 
 历史行程从添加保存功能后开始积累，仅代表系统生成过草案，不代表用户实际出行。偏好和历史草案保存在本地文件中，服务重启后仍可读取；preferences.json 和 trip_history.json 均不提交到代码仓库。
+
+## 独立信息查询
+
+向 POST /api/agent/chat 提交 {"question": "杭州东站到西湖怎么走？"}，识别为 information_query 后，由 answer_information() 搜索资料并调用模型回答。该分支不要求出发日期、出行时长等规划字段，也不生成行程草案。
+
+当前搜索可能只返回城市简介等不相关资料，此时回答可能说明资料不足；接通查询流程不代表能够提供准确的实时路线或导航。
 
 ## 错误返回
 

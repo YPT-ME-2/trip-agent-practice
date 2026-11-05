@@ -122,6 +122,7 @@ async def recognize_intent(question: str) -> dict:
   查询差旅政策使用 policy_query。
   保存或更新酒店偏好使用 preference_save。
   查询已保存偏好或历史行程使用 memory_query。
+  查询目的地、景点或交通等公开信息使用 information_query。
   其他需求使用 other。
 - origin：出发地。
 - destination：目的地。
@@ -470,6 +471,29 @@ async def answer_memory(question:str)->str:
 
     return await call_model(messages)
 
+async def answer_information(question:str)->str:
+    """回答用户关于目的地、景点或交通等公开信息的查询。"""
+    search_results = await search_information(question)
+
+    messages=[
+        {
+            "role": "system",
+            "content": load_skill("information-query"),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "用户问题": question,
+                    "搜索结果": search_results,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+
+    return await call_model(messages)
+
 
 async def agent_chat_service(
         question:str,
@@ -477,6 +501,13 @@ async def agent_chat_service(
         )->dict:
     requirements = await recognize_intent(question)
     intent = requirements.get("intent")
+
+    if intent == "information_query":
+        answer = await answer_information(question)
+        return {
+            "status": "completed",
+            "answer": answer,
+        }
 
     if intent == "memory_query":
         answer = await answer_memory(question)
@@ -511,7 +542,7 @@ async def agent_chat_service(
         }
     return {
         "status": "unsupported",
-        "answer": "目前支持行程规划、政策查询、酒店偏好保存和查询。",
+        "answer": "目前支持行程规划、政策查询、信息查询及酒店偏好保存和记忆查询。",
     }
 
 
