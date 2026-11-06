@@ -9,7 +9,8 @@ import asyncio
 
 
 app=FastAPI(title="差旅助手")
-pending_trips:dict[str, dict] = {}
+pending_trips:dict[str, dict] = {} #暂存待补全行程和报价
+conversation_history:dict[str, list[dict]] = {}#保存这个会话最近说过的话
 
 class PolicyRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
@@ -65,29 +66,34 @@ async def agent_chat(request: AgentRequest):
     conversation_id = request.conversation_id
     nightly_price = request.nightly_price
 
-    if conversation_id is not None:
-        previous=pending_trips.get(conversation_id)
-        if previous is None:
-            raise HTTPException(status_code=404, detail="没有找到待补充的行程，请不带 conversation_id 重新提交完整需求")
-        question=previous["question"] + "\n补充信息：" + question
-        if nightly_price is None:
-            nightly_price=previous.get("nightly_price")
-    else:
+    if conversation_id is None:
         conversation_id = uuid4().hex
+        conversation_history[conversation_id] = []
+    elif conversation_id not in conversation_history:
+        raise HTTPException(status_code=404, detail="会话不存在，请不带 conversation_id 开始新会话")
 
-    # result = await agent_chat_service(
-    #     question,
-    #     nightly_price=nightly_price
-    # )
+    history = conversation_history[conversation_id]
+    previous=pending_trips.get(conversation_id)
+    if previous is not None and nightly_price is None:
+        nightly_price = previous["nightly_price"]
+
     try:
         result = await agent_chat_service(
             question,
-            nightly_price=nightly_price
+            nightly_price=nightly_price,
+            conversation_history=history,
         )
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504, detail="模型接口请求超时，请稍后重试") from exc
     except aiohttp.ClientError as exc:
         raise HTTPException(status_code=502, detail="外部服务访问失败，请检查 Ollama 是否启动，以及联网搜索是否可用。") from exc
+
+    history.extend([
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": result["answer"]},
+    ])
+
+    conversation_history[conversation_id] = history[-20:]
 
     if result.get("status") == "needs_information":
         pending_trips[conversation_id] = {

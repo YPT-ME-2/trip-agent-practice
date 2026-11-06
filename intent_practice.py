@@ -17,94 +17,14 @@ from skill_loader import load_skill, load_skill_metadata, load_agent
 
 policy_service = PolicyService()
 
-# async def recognize_intent(question:str)->dict:
-#     """把用户的话整理成出行需求。"""
-#     messages = [
-#         {
-#             "role": "system",
-#             "content": """
-# 你是差旅助手，负责提取用户需求。
-
-# 请返回 JSON，包含以下字段：
-# - intent：行程规划用 itinerary_planning，其他需求用 other
-# 询问差旅报销标准、交通标准或审批规定用 policy_query;
-# 要求记住或更新酒店品牌偏好，使用 preference_save。
-# 询问之前保存的酒店偏好或历史行程草案，使用 memory_query。
-# 其他需求用 other。
-# - origin：出发地
-# - destination：目的地
-# - date：出发日期
-# - duration：出行时长
-# - hotel_preference：酒店偏好
-# - tasks：任务列表，每个任务包含 name 和 priority。
-#   行程规划默认返回：
-#   [
-#     {"name": "search", "priority": 1},
-#     {"name": "policy", "priority": 1},
-#     {"name": "plan", "priority": 2}
-#   ]
-#   如果用户明确要求不联网，返回：
-#   [
-#     {"name": "policy", "priority": 1},
-#     {"name": "plan", "priority": 2}
-#   ]
-#   非行程规划需求返回 []。
-#   priority 数字越小越先执行，同一 priority 的任务并行执行。
-
-# 用户没提供的信息填 null，不要猜测。
-# 只提取信息，不生成行程。
-# 用户没提供的信息填 null，不要猜测。
-# 日期保留用户原始表达，例如“11月5日”，未提供年份时不要补充年份。
-# 只提取信息，不生成行程。
-# """,
-#         },
-#         {
-#             "role": "user",
-#             "content": question,
-#         },
-#     ]
-
-#     # async with aiohttp.ClientSession() as session:
-#     #     async with session.post(
-#     #         "http://127.0.0.1:11434/api/chat",
-#     #         json={
-#     #             "model": "qwen3.5:9b",
-#     #             "messages": messages,
-#     #             "stream": False,
-#     #             "think": False,
-#     #             "format": "json",
-#     #         },
-#     #     ) as response:
-#     #         # response.raise_for_status()
-#     #         # data = await response.json()
-#     #         if response.status == 401:
-#     #             raise RuntimeError("搜索认证失败，请检查 SERPAPI_KEY 是否为有效的 SerpAPI 密钥")
-
-#     #         if response.status >= 400:
-#     #             raise RuntimeError(f"搜索请求失败，HTTP 状态码：{response.status}")
-
-#     #         data = await response.json()
-
-#     # return json.loads(data["message"]["content"])
-
-#     text = await call_model(messages, json_output=True)
-
-#     # messages[0]["content"] += (
-#     #     "\n\n可用技能简介：\n"
-#     #     + json.dumps(load_skill_metadata(), ensure_ascii=False)
-#     # )
-#     # return json.loads(text)
-
-#     messages[0]["content"] += (
-#         "\n\n可用技能简介：\n"
-#         + json.dumps(load_skill_metadata(), ensure_ascii=False)
-#     )
-
-#     text = await call_model(messages, json_output=True)
-#     return json.loads(text)
 
 
-async def recognize_intent(question: str) -> dict:
+
+
+async def recognize_intent(
+        question: str,
+        conversation_history: list[dict] | None = None,
+        ) -> dict:
     # [-1:] 取得最近一条记录，仍然是列表
     recent_trips = load_trip_history()[-1:]
 
@@ -117,6 +37,20 @@ async def recognize_intent(question: str) -> dict:
 请返回 JSON，包含以下字段：
 
 - rewritten_query：补全上下文后的完整问题。
+- intents：识别本次用户明确提出的所有意图，按处理顺序返回列表。
+  每项包含：
+  type：意图名称，使用下面 intent 中规定的名称。
+  question：只对应这一项意图的完整子问题。
+
+  例如，用户说“记住我喜欢如家，另外告诉我上海住宿标准”，返回：
+  [
+    {"type": "preference_save", "question": "记住我喜欢如家酒店"},
+    {"type": "policy_query", "question": "上海住宿每晚最多报销多少？"}
+  ]
+
+  只有一个需求时，列表中只放一项。
+  不要把历史对话中已经处理完的需求重复列为本次意图。
+  原有 intent 字段保留，填写 intents 第一项的 type。
 - intent：
   安排行程使用 itinerary_planning。
   查询差旅政策使用 policy_query。
@@ -128,7 +62,12 @@ async def recognize_intent(question: str) -> dict:
 - destination：目的地。
 - date：出发日期。
 - duration：出行时长。
-- hotel_preference：酒店偏好。
+- hotel_preference：本次提到的一个酒店品牌，使用字符串。
+- preference_action：偏好更新方式。
+  “还喜欢”“也喜欢”“再加一个”使用 append，表示保留原偏好并追加。
+  “以后只住”“改成”“不喜欢原来的了”使用 replace，表示替换。
+  单独说“记住我喜欢某酒店”使用 replace。
+  非偏好保存需求填 null
 - tasks：任务列表，每项包含 name 和 priority。
 
 上下文使用方式：
@@ -138,6 +77,9 @@ async def recognize_intent(question: str) -> dict:
 没有依据的信息填 null。
 日期保留原始表达，不自行补充年份。
 根据改写后的需求填写 origin、destination、date、duration 等字段。
+
+结合最近对话理解“这个”“刚才”“改成”等省略表达。
+当前对话有明确指向时，优先使用当前对话；明确引用历史行程时，再结合保存的行程记录。
 
 任务安排：
 行程规划默认返回：
@@ -153,7 +95,7 @@ async def recognize_intent(question: str) -> dict:
   {"name": "plan", "priority": 2}
 ]
 
-非行程规划需求返回 []。
+intents 包含 itinerary_planning 时，按上述规则生成规划 tasks；否则 tasks 返回 []。
 只输出 JSON，不生成行程草案。
 """,
         },
@@ -162,6 +104,7 @@ async def recognize_intent(question: str) -> dict:
             "content": json.dumps(
                 {
                     "本次需求": question,
+                    "最近对话": conversation_history or [],
                     "最近的行程草案": recent_trips,
                     "可用技能简介": load_skill_metadata(),
                 },
@@ -174,6 +117,10 @@ async def recognize_intent(question: str) -> dict:
     result = json.loads(text)
 
     print("改写后的需求：", result["rewritten_query"])
+    print(
+        "识别出的意图：",
+        json.dumps(result["intents"], ensure_ascii=False, indent=2),
+    )
 
     return result
 
@@ -185,43 +132,7 @@ async def generate_plan(
     """根据结构化需求生成行程草案。"""
     agent=load_agent("plan-trip", "ItineraryPlanningAgent")
     return await agent.reply(requirements, search_results, policy_results)
-    # messages = [
-    #     {
-    #         "role": "system",
-    #         "content": load_skill("plan-trip"),
-    #     },
-    #     {
-    #         "role": "user",
-    #         # "content": json.dumps(requirements, ensure_ascii=False),
-    #         "content": json.dumps(
-    #             {
-    #                 "出行需求": requirements,
-    #                 "搜索资料": search_results,
-    #                 "差旅政策": policy_results,
-    #             },
-    #             ensure_ascii=False,
-    #         ),
-    #     },
-    # ]
 
-    # # async with aiohttp.ClientSession() as session:
-    # #     async with session.post(
-    # #         "http://127.0.0.1:11434/api/chat",
-    # #         json={
-    # #             "model": "qwen3.5:9b",
-    # #             "messages": messages,
-    # #             "stream": False,
-    # #             "think": False,
-    # #         },
-    # #     ) as response:
-    # #         response.raise_for_status()
-    # #         data = await response.json()
-
-    # # return data["message"]["content"]
-    # text = await call_model(messages,json_output=False)
-    # return text
-
-# 偏好文件和当前 Python 文件放在同一个目录
 PREFERENCE_FILE = Path(__file__).parent / "preferences.json"
 
 def load_preference()->dict:
@@ -305,27 +216,6 @@ async def execute_tasks_node(state: TravelState):
 
     return updates
 
-# builder = StateGraph(TravelState)
-
-# builder.add_node("search", search_node)
-# builder.add_node("policy", policy_node)
-# builder.add_node("plan", plan_node)
-
-
-# # 两个任务都从起点出发
-# builder.add_edge(START, "search")
-# builder.add_edge(START, "policy")
-# builder.add_edge(["search","policy"], "plan")
-# builder.add_edge("plan", END)
-
-# builder = StateGraph(TravelState)
-
-# builder.add_node("execute_tasks", execute_tasks_node)
-# builder.add_node("plan", plan_node)
-
-# builder.add_edge(START, "execute_tasks")
-# builder.add_edge("execute_tasks", "plan")
-# builder.add_edge("plan", END)
 
 builder = StateGraph(TravelState)
 
@@ -494,13 +384,48 @@ async def answer_information(question:str)->str:
 
     return await call_model(messages)
 
-
 async def agent_chat_service(
-        question:str,
-        nightly_price: float | None = None,
-        )->dict:
-    requirements = await recognize_intent(question)
-    intent = requirements.get("intent")
+    question: str,
+    nightly_price: float | None = None,
+    conversation_history: list[dict] | None = None,
+) -> dict:
+    requirements = await recognize_intent(
+        question,
+        conversation_history=conversation_history,
+    )
+
+    results = []
+
+    for item in requirements["intents"]:
+        current = dict(requirements)
+        current["intent"] = item["type"]
+
+        result = await execute_intent(
+            question=item["question"],
+            requirements=current,
+            nightly_price=nightly_price,
+        )
+        results.append(result)
+
+        # 需要补充信息或无法执行时，先返回当前结果
+        if result["status"] != "completed":
+            break
+
+    if len(results) == 1:
+        return results[0]
+
+    return {
+        "status": results[-1]["status"],
+        "answer": "\n\n".join(r["answer"] for r in results),
+        "results": results,
+    }
+
+async def execute_intent(
+    question: str,
+    requirements: dict,
+    nightly_price: float | None = None,
+) -> dict:
+    intent = requirements["intent"]
 
     if intent == "information_query":
         answer = await answer_information(question)
@@ -533,13 +458,24 @@ async def agent_chat_service(
                 "answer": "请说明你偏好的酒店品牌。",
             }
         preferences = load_preference()
-        preferences["hotel_preference"] = hotel
+        action=requirements.get("preference_action")
+        if action=="append":
+            hotels=preferences.get("hotel_preference", [])
+            # 原来保存的是字符串，先转换成列表
+            if not isinstance(hotels, list):
+                hotels=[hotels]
+            hotels = hotels + [hotel]
+        else:
+            hotels = [hotel]
+
+        preferences["hotel_preference"] = hotels
         save_preferences(preferences)
 
         return {
             "status": "completed",
-            "answer": f"已保存酒店偏好：{hotel}",
+            "answer": "已保存酒店偏好：" + "、".join(hotels),
         }
+
     return {
         "status": "unsupported",
         "answer": "目前支持行程规划、政策查询、信息查询及酒店偏好保存和记忆查询。",
