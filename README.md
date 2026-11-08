@@ -45,7 +45,7 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 - skills/memory-query/SKILL.md：偏好与历史行程查询指令。
 - skills/information-query/SKILL.md：独立公开信息查询指令。
 - tool_practice.py：原生 tool_calls 多轮工具调用，支持天气查询、网页搜索和住宿限额检查；run_tool_agent() 已接入 /api/tool/chat，也可直接运行进行终端交互。
-- agentsccope_practicce.py：独立的 AgentScope 练习，通过 Msg 传递消息，并行查询记忆与政策后生成草案；尚未替换 FastAPI 的业务调度。
+- agentsccope_practicce.py：独立的 AgentScope 练习，通过 Msg 传递消息，按意图调用记忆、政策或公开信息 Agent 后生成草案；简化注册表按需创建并复用实例，尚未替换 FastAPI 的业务调度。
 - 差旅政策.txt：虚构的演示政策，不代表真实企业制度。
 
 ## 运行
@@ -184,6 +184,14 @@ POST /api/tool/chat 接收问题，调用 tool_practice.py 的 run_tool_agent(qu
 识别结果包括 preference_save 和 policy_query。程序依次执行，answer 合并两项回答，results 保留各项结果。只有一项意图时沿用原来的单项响应结构；某项返回非 completed 状态时停止继续执行。
 
 intents 表示用户要办理的业务事项；tasks 表示行程规划内部按优先级执行的检索和生成步骤。多意图清单当前顺序执行，行程内部同优先级的 tasks 才并行执行。
+
+## AgentScope 简化注册表
+
+直接运行 agentsccope_practicce.py 可练习 AgentScope 的 AgentBase、Msg 和调度。LazyAgentRegistry 手动登记意图与 Agent 类：policy_query 对应 PolicyAgent，memory_query 对应 MemoryQueryAgent，information_query 对应 InformationQueryAgent。
+
+调度器通过 registry[意图] 获取对象，首次访问才创建实例，后续返回缓存实例。已观察到“首次创建 Agent”日志，且同名两次获取的 is 比较结果为 True。InformationQueryAgent 复用 answer_information()，可查询天气或搜索网页；调度器原有执行代码无需为新增角色改写。
+
+这里实现的是实例的按需创建，类所在模块仍正常导入；尚未实现课程完整的目录扫描、动态模块导入、AgentBase 子类自动发现及构造参数注入。查询 Agent 当前一起 gather 执行，规划 Agent 仍由 main() 在查询结束后显式调用。实例复用不等于答案缓存，也不会自动增加会话记忆。
 
 ## 错误返回
 

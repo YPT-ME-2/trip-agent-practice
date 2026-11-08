@@ -4,7 +4,7 @@ import json
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
 
-from intent_practice import recognize_intent, answer_policy,answer_memory
+from intent_practice import recognize_intent, answer_policy,answer_memory,answer_information
 
 from llm_service import call_model
 from skill_loader import load_skill
@@ -48,6 +48,21 @@ class MemoryQueryAgent(AgentBase):
             role="assistant",
             content=answer,
         )
+
+class InformationQueryAgent(AgentBase):
+    async def reply(self, message: Msg) -> Msg:
+        requirements = json.loads(message.content)
+        question = requirements["intents"][0]["question"]
+
+        print("信息 Agent 收到的问题：", question)
+        answer = await answer_information(question)
+
+        return Msg(
+            name="InformationQueryAgent",
+            role="assistant",
+            content=answer,
+        )
+
 
 class OrchestrationAgent(AgentBase):
     def __init__(self,agent_registry):
@@ -106,21 +121,40 @@ class ItineraryPlanningAgent(AgentBase):
             content=plan,
         )
 
+class LazyAgentRegistry:
+    def __init__(self, agent_classes: dict):
+        self.agent_classes=agent_classes
+        self.instances = {}
+
+    def __getitem__(self, name:str):
+        if name not in self.instances:
+            agent_class = self.agent_classes[name]
+            self.instances[name] = agent_class()
+            print("首次创建 Agent：", name)
+        return self.instances[name]
+
 
 async def main():
     intention_agent = IntentionAgent()
-    orchestrator = OrchestrationAgent({
-        "policy_query": PolicyAgent(),
-        "memory_query": MemoryQueryAgent(),
+    registry = LazyAgentRegistry({
+        "policy_query": PolicyAgent,
+        "memory_query": MemoryQueryAgent,
+        "information_query": InformationQueryAgent,
     })
+
+    orchestrator = OrchestrationAgent(registry)
     user_message = Msg(
         name="user",
         role="user",
-        content="我之前喜欢什么酒店？另外上海住宿每晚最多报销多少？"
+        content="上海现在天气如何？另外上海住宿每晚最多报销多少？"
     )
 
     intention_result =await intention_agent.reply(user_message)
     result = await orchestrator.reply(intention_result)
+    print(
+    "是否复用同一个政策Agent：",
+    registry["policy_query"] is registry["policy_query"],
+)
 
     print("\n前序查询结果：")
     print(result.content)
