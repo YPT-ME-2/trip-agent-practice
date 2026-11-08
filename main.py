@@ -8,6 +8,7 @@ import aiohttp
 import asyncio
 
 from tool_practice import run_tool_agent
+from memory_service import save_chat_turn,load_chat_history
 
 app=FastAPI(title="差旅助手")
 pending_trips:dict[str, dict] = {} #暂存待补全行程和报价
@@ -71,7 +72,15 @@ async def agent_chat(request: AgentRequest):
         conversation_id = uuid4().hex
         conversation_history[conversation_id] = []
     elif conversation_id not in conversation_history:
-        raise HTTPException(status_code=404, detail="会话不存在，请不带 conversation_id 开始新会话")
+        saved_messages=[
+            {"role": item["role"], "content": item["content"]}
+            for item in load_chat_history()
+            if item["conversation_id"]==conversation_id
+        ]
+
+        if not saved_messages:
+            raise HTTPException(status_code=404, detail="会话不存在，请不带 conversation_id 开始新会话")
+        conversation_history[conversation_id]=saved_messages[-20:]
 
     history = conversation_history[conversation_id]
     previous=pending_trips.get(conversation_id)
@@ -83,6 +92,7 @@ async def agent_chat(request: AgentRequest):
             question,
             nightly_price=nightly_price,
             conversation_history=history,
+            conversation_id=conversation_id,
         )
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504, detail="模型接口请求超时，请稍后重试") from exc
@@ -93,6 +103,11 @@ async def agent_chat(request: AgentRequest):
         {"role": "user", "content": question},
         {"role": "assistant", "content": result["answer"]},
     ])
+    save_chat_turn(
+        conversation_id=conversation_id,
+        question=question,
+        answer=result["answer"],
+    )
 
     conversation_history[conversation_id] = history[-20:]
 

@@ -57,7 +57,7 @@ class PolicyService:
 
         documents=await self.vector_store.asimilarity_search(
             query,
-            k=2,
+            k=3,
         )      
         return [
         {

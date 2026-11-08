@@ -2,3 +2,4 @@
 __pycache__/
 preferences.json
 trip_history.json
+chat_history.json

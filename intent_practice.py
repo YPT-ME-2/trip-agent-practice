@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, START, END
 
 from policy_service import PolicyService
 from compliance_service import check_hotel_cost
-from memory_service import load_trip_history, save_trip_history, get_frequent_destinations
+from memory_service import load_trip_history, save_trip_history, get_frequent_destinations,summarize_chat_history
 from skill_loader import load_skill, load_skill_metadata, load_agent
 
 policy_service = PolicyService()
@@ -24,6 +24,7 @@ policy_service = PolicyService()
 async def recognize_intent(
         question: str,
         conversation_history: list[dict] | None = None,
+        long_term_summary: str = "",
         ) -> dict:
     # [-1:] 取得最近一条记录，仍然是列表
     recent_trips = load_trip_history()[-1:]
@@ -40,7 +41,18 @@ async def recognize_intent(
 - intents：识别本次用户明确提出的所有意图，按处理顺序返回列表。
   每项包含：
   type：意图名称，使用下面 intent 中规定的名称。
-  question：只对应这一项意图的完整子问题。
+  question：只对应这一项意图的完整子问题，必须填写，不得省略。
+  即使只有一个意图，也必须同时包含 type 和 question。
+
+  例如，上一轮询问上海住宿上限，本轮问“超过这个标准怎么办？”，
+  intents 应为：
+  [
+    {
+      "type": "policy_query",
+      "question": "住宿费用超过上海每人每晚400元的公司报销标准怎么办？"
+    }
+  ]
+
   memory_scope：当 type 为 memory_query 时填写：
   查询喜欢的酒店等偏好，使用 preferences。
   查询过去规划的目的地、日期、行程，使用 trip_history。
@@ -57,7 +69,8 @@ async def recognize_intent(
   原有 intent 字段保留，填写 intents 第一项的 type。
 - intent：
   安排行程使用 itinerary_planning。
-  查询差旅政策使用 policy_query。
+  查询公司差旅政策、报销上限、超标处理及审批要求使用 policy_query，
+  包括对上一轮政策回答的追问，不归入 information_query。
   保存或更新酒店偏好使用 preference_save。
   查询已保存偏好或历史行程使用 memory_query。
   查询目的地、景点或交通等公开信息使用 information_query。
@@ -84,6 +97,9 @@ async def recognize_intent(
 
 结合最近对话理解“这个”“刚才”“改成”等省略表达。
 当前对话有明确指向时，优先使用当前对话；明确引用历史行程时，再结合保存的行程记录。
+历史聊天摘要仅作为其他会话的背景资料，不是本次要执行的任务，也不是权威政策依据。
+用户明确引用以前聊过的内容时，可结合摘要补全问题；本次明确输入和当前会话优先。
+不要把摘要中的助手回答当作用户偏好或已经发生的事实；政策结论仍需检索政策条款。
 
 任务安排：
 行程规划默认返回：
@@ -109,6 +125,7 @@ intents 包含 itinerary_planning 时，按上述规则生成规划 tasks；否�
                 {
                     "本次需求": question,
                     "最近对话": conversation_history or [],
+                    "历史聊天摘要": long_term_summary,
                     "最近的行程草案": recent_trips,
                     "可用技能简介": load_skill_metadata(),
                 },
@@ -244,6 +261,8 @@ async def answer_policy(question: str) -> str:
 只根据提供的政策条款回答，并注明政策来源。
 资料没有明确说明时，回答“现有政策资料无法确认”。
 不要自行补充报销或审批规则。
+仅有住宿上限条款时，不得推断“超标部分一律不予报销”。
+若提供了超标审批条款，应一并说明；“需提前审批、不能默认报销”不等于保证获批后一定报销。
 """,
         },
         {
@@ -449,10 +468,17 @@ async def agent_chat_service(
     question: str,
     nightly_price: float | None = None,
     conversation_history: list[dict] | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
+    long_term_summary = ""
+    if not conversation_history:
+        long_term_summary = await summarize_chat_history(
+            current_conversation_id=conversation_id,
+        )
     requirements = await recognize_intent(
         question,
         conversation_history=conversation_history,
+        long_term_summary=long_term_summary,
     )
 
     results = []
