@@ -26,6 +26,8 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 - 统一接口支持通过 conversation_id 补充缺失信息，并保留上一轮住宿报价。
 - 同一 conversation_id 保留最近20条用户和助手消息（约10轮对话），意图识别时结合最近对话补全问题，完成一次回答后仍可继续追问。
 - 模型请求设置120秒超时，统一接口将 aiohttp 网络错误转换为502、超时转换为504。
+- 公开信息问答可选择网页搜索或 wttr.in 天气查询，支持当前天气和接口提供日期范围内的每日最低、最高气温。
+- 原生 tool_calls 支持天气查询、网页搜索和住宿限额检查，可在一次请求内根据前序工具结果继续调用工具；已接入 POST /api/tool/chat。
 
 ## 文件职责
 
@@ -33,7 +35,7 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 - intent_practice.py：recognize_intent() 识别需求，agent_chat_service() 遍历多意图清单，execute_intent() 执行单项业务；同时包含行程工作流和终端入口。
 - llm_service.py：统一调用 Ollama。
 - policy_service.py：差旅政策向量检索。
-- search_service.py：获取网页搜索结果。
+- search_service.py：获取网页搜索结果，以及当前天气和每日气温预报。
 - compliance_service.py：比较每人每晚住宿报价与城市上限。
 - policy_rules.json：住宿限额的统一数据来源，同时用于费用检查和政策检索。
 - memory_service.py：保存和读取行程草案，统计目的地规划次数，并提供独立的历史摘要练习函数。
@@ -42,7 +44,7 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 - skills/plan-trip/script/agent.py：规划 Agent，接收需求与检索资料，调用模型生成草案。
 - skills/memory-query/SKILL.md：偏好与历史行程查询指令。
 - skills/information-query/SKILL.md：独立公开信息查询指令。
-- tool_practice.py：独立的 Ollama 工具调用闭环练习，尚未接入业务接口。
+- tool_practice.py：原生 tool_calls 多轮工具调用，支持天气查询、网页搜索和住宿限额检查；run_tool_agent() 已接入 /api/tool/chat，也可直接运行进行终端交互。
 - agentsccope_practicce.py：独立的 AgentScope 练习，通过 Msg 传递消息，并行查询记忆与政策后生成草案；尚未替换 FastAPI 的业务调度。
 - 差旅政策.txt：虚构的演示政策，不代表真实企业制度。
 
@@ -79,7 +81,7 @@ python -m uvicorn main:app --reload --port 8002
 }
 ```
 
-POST /api/trip/plan 也支持同样的请求字段。nightly_price 表示每人每晚住宿报价，单位为元，必须是非负有限数值；省略或传 null 表示报价未知。目前仅从该字段读取报价，不从 question 中提取。
+POST /api/trip/plan 也支持同样的请求字段。nightly_price 表示每人每晚住宿报价，单位为元，必须是非负有限数值；省略或传 null 表示报价未知。这两个行程规划入口仅从该字段读取报价，不从 question 中提取；独立的 /api/tool/chat 则由模型从问题中提取工具参数。
 
 示例中杭州上限为400元，hotel_cost_check 返回：
 
@@ -133,6 +135,28 @@ summarize_trip_history() 是独立的历史摘要练习，目前未接入接口�
 
 当前搜索可能只返回城市简介等不相关资料，此时回答可能说明资料不足；接通查询流程不代表能够提供准确的实时路线或导航。
 
+天气问题如 {"question": "杭州明天最低和最高气温是多少？"}，由 answer_information() 调用模型返回 type 和 city，再选择 query_weather()。天气工具从 wttr.in 读取当前天气及每日气温预报，并提供 query_date 帮助理解今天和明天；不支持查询返回日期范围以外的预报。
+
+## 原生工具调用接口
+
+POST /api/tool/chat 接收问题，调用 tool_practice.py 的 run_tool_agent(question)。模型通过原生 tool_calls 选择 query_weather、search_information 或 check_hotel_cost，Python 执行工具并把结果作为 tool 消息回传；下一轮仍可请求工具，没有 tool_calls 时返回最终答案。
+
+```json
+{
+  "question": "先查杭州明天最低气温。如果低于10℃，再检查每人每晚450元的酒店是否超标；否则只回答天气。"
+}
+```
+
+返回结构为 {"status": "completed", "answer": "模型最终回答"}，调用过程显示在服务终端。已在一次实际请求中观察到：先查天气，再根据明天最低8℃调用住宿检查，最后说明450元超过400元上限、需提前审批。
+
+天气和搜索可以组合请求，例如 {"question": "杭州明天气温如何？另外搜索西湖主要景点并附来源。"}。网页搜索复用现有 Bing RSS 服务，返回结果可能不够相关。
+
+天气工具中的 temperature_c、description、humidity 是当前观测；forecasts 仅包含对应日期的最低和最高气温。已验证模型能回答明天气温，并说明未提供明天湿度。
+
+该接口不保存跨请求会话，也不返回独立的 hotel_cost_check 字段。status 为 completed 表示函数返回了模型答案，不代表程序独立验证了用户的所有任务均已完成。日期理解、条件判断和工具选择仍可能出错；已观察到模型漏调工具、把今天当明天及把当前湿度当预报的情况，明确提示后对应测试通过。
+
+/api/agent/chat 继续使用原有意图识别、记忆和业务调度；其信息查询分支使用模型返回的 type/city 选择工具，没有改成此原生工具循环。
+
 ## 多意图请求示例
 
 向 POST /api/agent/chat 提交：
@@ -149,7 +173,7 @@ intents 表示用户要办理的业务事项；tasks 表示行程规划内部按
 
 ## 错误返回
 
-POST /api/agent/chat 中，aiohttp 网络访问失败返回502，超时返回504，响应正文的 detail 提供错误提示。这不覆盖所有客户端异常或程序错误，也尚未覆盖另外两个业务接口。120秒限制针对每次模型请求，不是整个规划流程的总时长。
+POST /api/agent/chat 中，aiohttp 网络访问失败返回502，超时返回504，响应正文的 detail 提供错误提示。这不覆盖所有客户端异常或程序错误，也尚未覆盖其他业务接口（包括 /api/tool/chat）。120秒限制针对每次模型请求，不是整个规划或多轮工具调用流程的总时长。
 
 ## 当前限制
 
@@ -162,3 +186,4 @@ POST /api/agent/chat 中，aiohttp 网络访问失败返回502，超时返回504
 - 使用受限任务编排，尚未复现原项目完整的 AgentScope 多智能体架构。
 - 仅规划 Agent 接入了代码懒加载，技能名与类名仍显式指定，尚未实现课程完整的 Agent 注册表和类自动发现。
 - 短期对话按会话ID区分，但长期偏好和行程文件仍是单用户共享；日期、上下文补全和其他生成内容仍可能出错。
+- 工具循环当前没有轮数上限；没有 tool_calls 就结束，不能保证模型每次都完成所有条件任务。天气查询不代表实时票务、房价或预订能力。

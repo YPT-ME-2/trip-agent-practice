@@ -4,7 +4,7 @@ import json
 from llm_service import call_model
 from pathlib import Path
 
-from search_service import search_information
+from search_service import search_information,query_weather
 
 from typing import TypedDict
 
@@ -377,25 +377,71 @@ async def answer_memory(
     return await call_model(messages)
 
 async def answer_information(question:str)->str:
-    """回答用户关于目的地、景点或交通等公开信息的查询。"""
-    search_results = await search_information(question)
+    """选择查询工具，再根据查询结果回答。"""
+    route_messages=[
+        {
+        "role": "system",
+        "content": (
+            "判断用户需要天气查询还是普通网页搜索。"
+            '返回JSON，包含type和city。'
+            '天气查询使用type="weather"，city填写城市名；'
+            '其他查询使用type="search"，city填写null。'
+            '未提供城市时city填写null，不猜测城市。'
+        ),
+        },
+        {
+            "role": "user",
+            "content": question,
+        },
+    ]
+    text=await call_model(route_messages,json_output=True)
+    route=json.loads(text)
 
+    if route["type"] == "weather":
+        if route["city"] is None:
+            return "请问要查询哪个城市的天气？"
+        query_result = await query_weather(route["city"])
+    else:
+        query_result = await search_information(question)
     messages=[
         {
             "role": "system",
-            "content": load_skill("information-query"),
+            "content": (
+                load_skill("information-query")
+                + "\n查询结果可能来自网页搜索或天气接口。"
+                "当前天气与每日预报分别回答，不要混用。"
+                "根据query_date理解今天和明天，按forecasts中的日期查找预报。"
+                "预报日期不在数据范围内时，说明接口未提供。"
+            ),
         },
         {
             "role": "user",
             "content": json.dumps(
                 {
                     "用户问题": question,
-                    "搜索结果": search_results,
+                    "查询结果": query_result,
                 },
                 ensure_ascii=False,
             ),
         },
     ]
+
+    # messages=[
+    #     {
+    #         "role": "system",
+    #         "content": load_skill("information-query"),
+    #     },
+    #     {
+    #         "role": "user",
+    #         "content": json.dumps(
+    #             {
+    #                 "用户问题": question,
+    #                 "搜索结果": search_results,
+    #             },
+    #             ensure_ascii=False,
+    #         ),
+    #     },
+    # ]
 
     return await call_model(messages)
 

@@ -7,6 +7,7 @@ from uuid import uuid4
 import aiohttp
 import asyncio
 
+from tool_practice import run_tool_agent
 
 app=FastAPI(title="差旅助手")
 pending_trips:dict[str, dict] = {} #暂存待补全行程和报价
@@ -108,8 +109,17 @@ async def agent_chat(request: AgentRequest):
         "conversation_id": conversation_id
     }
 
-    # result = await agent_chat_service(
-    #     question,
-    #     nightly_price=request.nightly_price
-    # )
-    # return result
+class ToolRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+@app.post("/api/tool/chat")
+async def tool_chat(request:ToolRequest):
+    question=request.question.strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="问题不能为空")
+    answer=await run_tool_agent(question)
+
+    return {
+        "status": "completed",
+        "answer": answer,
+    }

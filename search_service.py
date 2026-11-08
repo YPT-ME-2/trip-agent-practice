@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 
 import aiohttp
-
+from datetime import date
 
 async def search_information(query: str) -> list[dict]:
     """查询必应 RSS 搜索结果，返回标题、来源链接和摘要。"""
@@ -34,3 +34,44 @@ async def search_information(query: str) -> list[dict]:
         })
 
     return results
+
+
+async def query_weather(city:str)->dict:
+    """查询指定城市的当前天气。"""
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=20),
+        trust_env=False,
+    ) as session:
+        async with session.get(
+            f"https://wttr.in/{city}",
+            params={"format": "j1"},
+        ) as response:
+            response.raise_for_status()
+            data = await response.json(content_type=None)
+
+    current=data["current_condition"][0]
+    forecasts=[]
+    for day in data["weather"]:
+        forecasts.append({
+            "date": day["date"],
+            "min_temperature_c": day["mintempC"],
+            "max_temperature_c": day["maxtempC"],
+        })
+
+    return{
+        "city": city,
+        "query_date": date.today().isoformat(),
+        "temperature_c": current["temp_C"],
+        "description": current["weatherDesc"][0]["value"],
+        "humidity": current["humidity"],
+        "forecasts": forecasts,
+        "source": f"https://wttr.in/{city}",
+    }
+
+
+if __name__ == "__main__":
+    import asyncio
+    import json
+
+    result = asyncio.run(query_weather("杭州"))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
