@@ -7,3 +7,5 @@ langchain-community==0.4.2
 langchain-ollama==1.1.0
 faiss-cpu==1.15.1
 PyYAML==6.0.3
+agentscope==1.0.16
+mcp==1.30.0

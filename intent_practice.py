@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, START, END
 
 from policy_service import PolicyService
 from compliance_service import check_hotel_cost
-from memory_service import load_trip_history, save_trip_history
+from memory_service import load_trip_history, save_trip_history, get_frequent_destinations
 from skill_loader import load_skill, load_skill_metadata, load_agent
 
 policy_service = PolicyService()
@@ -41,6 +41,10 @@ async def recognize_intent(
   每项包含：
   type：意图名称，使用下面 intent 中规定的名称。
   question：只对应这一项意图的完整子问题。
+  memory_scope：当 type 为 memory_query 时填写：
+  查询喜欢的酒店等偏好，使用 preferences。
+  查询过去规划的目的地、日期、行程，使用 trip_history。
+  同时查询两种记忆，使用 both。
 
   例如，用户说“记住我喜欢如家，另外告诉我上海住宿标准”，返回：
   [
@@ -337,10 +341,22 @@ async def plan_trip(
         "hotel_cost_check": hotel_cost_check,
     }
 
-async def answer_memory(question:str)->str:
-    """回答用户关于之前保存的酒店偏好的问题。"""
-    preferences=load_preference()
-    trip_history = load_trip_history()
+async def answer_memory(
+        question:str,
+        memory_scope:str="both",
+        )->str:
+    """根据保存的偏好、行程草案和目的地统计回答记忆问题。"""
+    memory = {}
+
+    if memory_scope in ("preferences", "both"):
+        memory["已保存偏好"] = load_preference()
+
+    if memory_scope in ("trip_history", "both"):
+        memory["历史行程草案"] = [
+            {key: trip[key] for key in ("origin", "destination", "date", "duration")}
+            for trip in load_trip_history()[-10:]
+        ]
+        memory["全部历史中规划次数最多的目的地（前3名）"] = get_frequent_destinations()
     messages=[
         {
             "role": "system",
@@ -351,8 +367,7 @@ async def answer_memory(question:str)->str:
             "content": json.dumps(
                 {
                     "用户问题": question,
-                    "已保存偏好": preferences,
-                    "历史行程草案": trip_history[-10:],
+                    "记忆资料": memory,
                 },
                 ensure_ascii=False,
             ),
@@ -399,6 +414,7 @@ async def agent_chat_service(
     for item in requirements["intents"]:
         current = dict(requirements)
         current["intent"] = item["type"]
+        current["memory_scope"] = item.get("memory_scope", "both")
 
         result = await execute_intent(
             question=item["question"],
@@ -435,7 +451,8 @@ async def execute_intent(
         }
 
     if intent == "memory_query":
-        answer = await answer_memory(question)
+        answer = await answer_memory(question,
+                                      memory_scope=requirements["memory_scope"])
         return {
             "status": "completed",
             "answer": answer,

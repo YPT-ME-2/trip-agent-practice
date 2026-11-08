@@ -3,6 +3,8 @@
 参考课程差旅助手流程实现的学习项目，使用本地 Ollama、
 LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存。
 
+学习总览：[项目总览.md](项目总览.md) 包含统一入口总图、真实函数索引、课程实现对照，以及下一阶段的学习建议。
+
 ## 已实现
 
 - 模型识别行程规划、政策查询、偏好保存、记忆查询和公开信息查询五类意图。
@@ -34,13 +36,14 @@ LangGraph 和 FastAPI，支持行程草案、政策问答及酒店偏好保存�
 - search_service.py：获取网页搜索结果。
 - compliance_service.py：比较每人每晚住宿报价与城市上限。
 - policy_rules.json：住宿限额的统一数据来源，同时用于费用检查和政策检索。
-- memory_service.py：将行程草案保存到本地 trip_history.json，并读取历史记录。
+- memory_service.py：保存和读取行程草案，统计目的地规划次数，并提供独立的历史摘要练习函数。
 - skill_loader.py：发现 Skill 元数据，读取详细指令，按指定类名加载并缓存 Agent 实例。
 - skills/plan-trip/SKILL.md：行程规划指令。
 - skills/plan-trip/script/agent.py：规划 Agent，接收需求与检索资料，调用模型生成草案。
 - skills/memory-query/SKILL.md：偏好与历史行程查询指令。
 - skills/information-query/SKILL.md：独立公开信息查询指令。
 - tool_practice.py：独立的 Ollama 工具调用闭环练习，尚未接入业务接口。
+- agentsccope_practicce.py：独立的 AgentScope 练习，通过 Msg 传递消息，并行查询记忆与政策后生成草案；尚未替换 FastAPI 的业务调度。
 - 差旅政策.txt：虚构的演示政策，不代表真实企业制度。
 
 ## 运行
@@ -119,6 +122,10 @@ POST /api/trip/plan 也支持同样的请求字段。nightly_price 表示每人�
 向 POST /api/agent/chat 提交 {"question": "我之前说喜欢住什么酒店？"} 可查询已保存的酒店偏好；提交 {"question": "我之前规划过哪些目的地？"} 可查询已保存的历史行程草案。
 
 历史行程从添加保存功能后开始积累，仅代表系统生成过草案，不代表用户实际出行。偏好和历史草案保存在本地文件中，服务重启后仍可读取；preferences.json 和 trip_history.json 均不提交到代码仓库。
+
+提交 {"question": "我之前规划哪个城市最多？分别有多少条规划记录？"}，记忆查询会同时读取最近10条草案和全部历史记录中规划次数最多的前3个目的地。次数由 get_frequent_destinations() 计算，模型负责组织回答；次数不代表实际出行频率。
+
+summarize_trip_history() 是独立的历史摘要练习，目前未接入接口。AgentScope 练习依赖 agentscope==1.0.16 和 mcp==1.30.0，已记录在 requirements.txt。
 
 ## 独立信息查询
 
