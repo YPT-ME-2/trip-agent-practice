@@ -187,11 +187,17 @@ intents 表示用户要办理的业务事项；tasks 表示行程规划内部按
 
 ## AgentScope 简化注册表
 
-直接运行 agentsccope_practicce.py 可练习 AgentScope 的 AgentBase、Msg 和调度。LazyAgentRegistry 手动登记意图与 Agent 类：policy_query 对应 PolicyAgent，memory_query 对应 MemoryQueryAgent，information_query 对应 InformationQueryAgent。
+直接运行 agentsccope_practicce.py 可练习 AgentScope 的 AgentBase、Msg 和调度。LazyAgentRegistry 手动登记意图与 Agent 类：policy_query 对应 PolicyAgent，memory_query 对应 MemoryQueryAgent，information_query 对应 InformationQueryAgent，itinerary_planning 对应 ItineraryPlanningAgent。
 
 调度器通过 registry[意图] 获取对象，首次访问才创建实例，后续返回缓存实例。已观察到“首次创建 Agent”日志，且同名两次获取的 is 比较结果为 True。InformationQueryAgent 复用 answer_information()，可查询天气或搜索网页；调度器原有执行代码无需为新增角色改写。
 
-这里实现的是实例的按需创建，类所在模块仍正常导入；尚未实现课程完整的目录扫描、动态模块导入、AgentBase 子类自动发现及构造参数注入。查询 Agent 当前一起 gather 执行，规划 Agent 仍由 main() 在查询结束后显式调用。实例复用不等于答案缓存，也不会自动增加会话记忆。
+这里实现的是实例的按需创建，类所在模块仍正常导入；尚未实现课程完整的目录扫描、动态模块导入、AgentBase 子类自动发现及构造参数注入。实例复用不等于答案缓存，也不会自动增加会话记忆。
+
+IntentionAgent 使用独立的 SCHEDULE_PROMPT 和 call_model() 生成 agent_schedule，每项包含 type、question、priority；记忆查询还可包含 memory_scope。OrchestrationAgent 按优先级升序分批，同批 gather 并行，批次完成后汇总 previous_results 传给下一批。规划任务也由注册表获取并在调度器内执行，main() 不再固定追加规划。
+
+已验证两种计划：天气与住宿标准查询只有两个优先级1任务、不生成草案；“2026年11月10日从深圳去上海出差三天，不用联网”生成政策查询1、规划2，没有联网信息任务，日期范围为11月10日至12日。计划仍由模型提出，不保证每次任务选择或依赖顺序都正确。
+
+该练习没有接入统一API的聊天持久化与跨会话摘要，也不具备 plan_trip() 的缺失字段追问和独立费用检查。规划正文仍可能虚构费用细节；成功执行计划不能证明草案全部可靠。
 
 ## 错误返回
 
